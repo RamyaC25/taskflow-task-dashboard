@@ -4,17 +4,23 @@ const Database = require("better-sqlite3");
 const path = require("path");
 const fs = require("fs");
 const helmet = require("helmet");
+
 const app = express();
 const PORT = process.env.PORT || 3000;
 
+// Middleware
 app.use(express.json());
 app.use(helmet());
 app.use(express.static(__dirname));
 
-const db = new Database(
-    path.join(__dirname, "database", "tasks.db")
-);
+// Create database folder if it does not exist
+const dbFolder = process.env.DB_PATH || path.join(__dirname, "database");
+fs.mkdirSync(dbFolder, { recursive: true });
 
+// Connect to SQLite database
+const db = new Database(path.join(dbFolder, "tasks.db"));
+
+// Create tasks table
 db.prepare(`
     CREATE TABLE IF NOT EXISTS tasks (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -26,7 +32,10 @@ db.prepare(`
 
 // READ - Get all tasks
 app.get("/api/tasks", (req, res) => {
-    const tasks = db.prepare("SELECT * FROM tasks ORDER BY id DESC").all();
+    const tasks = db.prepare(
+        "SELECT * FROM tasks ORDER BY id DESC"
+    ).all();
+
     res.json(tasks);
 });
 
@@ -66,7 +75,10 @@ app.put("/api/tasks/:id", (req, res) => {
         return res.status(404).json({ error: "Task not found" });
     }
 
-    const task = db.prepare("SELECT * FROM tasks WHERE id = ?").get(id);
+    const task = db.prepare(
+        "SELECT * FROM tasks WHERE id = ?"
+    ).get(id);
+
     res.json(task);
 });
 
@@ -83,7 +95,8 @@ app.delete("/api/tasks/:id", (req, res) => {
     res.json({ message: "Task deleted successfully" });
 });
 
-app.listen(PORT, () => {
-    console.log(`Server running at http://localhost:${PORT}`);
+// Start server
+app.listen(PORT, "0.0.0.0", () => {
+    console.log(`Server running on port ${PORT}`);
     console.log("SQLite database connected successfully!");
 });
