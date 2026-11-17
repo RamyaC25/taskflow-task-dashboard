@@ -1,144 +1,101 @@
 
-const taskForm = document.getElementById("taskForm");
-const tasksContainer = document.getElementById("tasks");
+const express = require("express");
+const Database = require("better-sqlite3");
+const path = require("path");
+const fs = require("fs");
+const helmet = require("helmet");
 
-// Load and display all tasks
-async function loadTasks() {
-    try {
-        const response = await fetch("/api/tasks");
-        if (!response.ok) throw new Error("Could not load tasks");
+const app = express();
+const PORT = process.env.PORT || 3000;
 
-        const tasks = await response.json();
+app.use(express.json());
 
-        tasksContainer.innerHTML = "";
+// Allow requests from GitHub Pages
+app.use((req, res, next) => {
+    res.header("Access-Control-Allow-Origin", "https://ramyac25.github.io");
+    res.header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS");
+    res.header("Access-Control-Allow-Headers", "Content-Type");
 
-        if (tasks.length === 0) {
-            tasksContainer.innerHTML = "<p>No tasks yet. Add your first task!</p>";
-            return;
-        }
-
-        tasks.forEach(task => {
-            const card = document.createElement("div");
-            card.className = "task-card";
-
-            const title = document.createElement("h3");
-            title.textContent = task.title;
-
-            const description = document.createElement("p");
-            description.textContent = task.description || "No description";
-
-            const status = document.createElement("p");
-            status.className = "task-status";
-            status.textContent = "Status: " + task.status;
-
-            const editButton = document.createElement("button");
-            editButton.textContent = "Edit";
-            editButton.addEventListener("click", () => editTask(task));
-
-            const deleteButton = document.createElement("button");
-            deleteButton.textContent = "Delete";
-            deleteButton.className = "delete-btn";
-            deleteButton.addEventListener("click", () => deleteTask(task.id));
-
-            card.append(title, description, status, editButton, deleteButton);
-            tasksContainer.appendChild(card);
-        });
-    } catch (error) {
-        tasksContainer.textContent = "Error loading tasks. Please try again.";
-        console.error(error);
+    if (req.method === "OPTIONS") {
+        return res.sendStatus(204);
     }
-}
-
-// CREATE - Add a new task
-taskForm.addEventListener("submit", async function(event) {
-    event.preventDefault();
-
-    const task = {
-        title: document.getElementById("title").value,
-        description: document.getElementById("description").value,
-        status: document.getElementById("status").value
-    };
-
-    try {
-        const response = await fetch("/api/tasks", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify(task)
-        });
-
-        if (!response.ok) throw new Error("Could not add task");
-
-        taskForm.reset();
-        loadTasks();
-    } catch (error) {
-        alert(error.message);
-    }
+    next();
 });
 
-// UPDATE - Edit an existing task
-async function editTask(task) {
-    const title = prompt("Enter updated task title:", task.title);
-    if (title === null) return;
+app.use(helmet());
+app.use(express.static(__dirname));
 
-    if (!title.trim()) {
-        alert("Task title cannot be empty.");
-        return;
+// Create database folder if missing
+const dbFolder = path.join(__dirname, "database");
+fs.mkdirSync(dbFolder, { recursive: true });
+
+const db = new Database(path.join(dbFolder, "tasks.db"));
+
+db.prepare(`
+    CREATE TABLE IF NOT EXISTS tasks (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        title TEXT NOT NULL,
+        description TEXT,
+        status TEXT DEFAULT 'Pending'
+    )
+`).run();
+
+// READ
+app.get("/api/tasks", (req, res) => {
+    res.json(db.prepare("SELECT * FROM tasks ORDER BY id DESC").all());
+});
+
+// CREATE
+app.post("/api/tasks", (req, res) => {
+    const { title, description, status } = req.body;
+
+    if (!title || !title.trim()) {
+        return res.status(400).json({ error: "Title is required" });
     }
 
-    const description = prompt("Enter updated description:", task.description);
-    if (description === null) return;
+    const result = db.prepare(
+        "INSERT INTO tasks (title, description, status) VALUES (?, ?, ?)"
+    ).run(title.trim(), description || "", status || "Pending");
 
-    const status = prompt(
-        "Enter status: Pending, In Progress, or Completed",
-        task.status
-    );
+    const task = db.prepare("SELECT * FROM tasks WHERE id = ?")
+        .get(result.lastInsertRowid);
 
-    if (status === null) return;
+    res.status(201).json(task);
+});
 
-    const statusMap = {
-    "pending": "Pending",
-    "in progress": "In Progress",
-    "completed": "Completed"
-};
+// UPDATE
+app.put("/api/tasks/:id", (req, res) => {
+    const { title, description, status } = req.body;
+    const id = Number(req.params.id);
 
-const finalStatus = statusMap[status.trim().toLowerCase()];
-
-if (!finalStatus) {
-    alert("Please enter Pending, In Progress, or Completed.");
-    return;
-}
-
-    try {
-        const response = await fetch(`/api/tasks/${task.id}`, {
-            method: "PUT",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ title, description, status: finalStatus })
-        });
-
-        if (!response.ok) throw new Error("Could not update task");
-
-        loadTasks();
-    } catch (error) {
-        alert(error.message);
+    if (!title || !title.trim()) {
+        return res.status(400).json({ error: "Title is required" });
     }
-}
 
-// DELETE - Delete a task
-async function deleteTask(id) {
-    if (!confirm("Are you sure you want to delete this task?")) return;
+    const result = db.prepare(
+        "UPDATE tasks SET title = ?, description = ?, status = ? WHERE id = ?"
+    ).run(title.trim(), description || "", status || "Pending", id);
 
-    try {
-        const response = await fetch(`/api/tasks/${id}`, {
-            method: "DELETE"
-        });
-
-        if (!response.ok) throw new Error("Could not delete task");
-
-        loadTasks();
-    } catch (error) {
-        alert(error.message);
+    if (!result.changes) {
+        return res.status(404).json({ error: "Task not found" });
     }
-}
 
-// Display tasks when the page opens
-loadTasks();
+    res.json(db.prepare("SELECT * FROM tasks WHERE id = ?").get(id));
+});
+
+// DELETE
+app.delete("/api/tasks/:id", (req, res) => {
+    const result = db.prepare(
+        "DELETE FROM tasks WHERE id = ?"
+    ).run(Number(req.params.id));
+
+    if (!result.changes) {
+        return res.status(404).json({ error: "Task not found" });
+    }
+
+    res.json({ message: "Task deleted successfully" });
+});
+
+app.listen(PORT, "0.0.0.0", () => {
+    console.log(`Server running on port ${PORT}`);
+});
