@@ -8,19 +8,29 @@ const helmet = require("helmet");
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// Middleware
 app.use(express.json());
+
+// Allow requests from GitHub Pages
+app.use((req, res, next) => {
+    res.header("Access-Control-Allow-Origin", "https://ramyac25.github.io");
+    res.header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS");
+    res.header("Access-Control-Allow-Headers", "Content-Type");
+
+    if (req.method === "OPTIONS") {
+        return res.sendStatus(204);
+    }
+    next();
+});
+
 app.use(helmet());
 app.use(express.static(__dirname));
 
-// Create database folder if it does not exist
-const dbFolder = process.env.DB_PATH || path.join(__dirname, "database");
+// Create database folder if missing
+const dbFolder = path.join(__dirname, "database");
 fs.mkdirSync(dbFolder, { recursive: true });
 
-// Connect to SQLite database
 const db = new Database(path.join(dbFolder, "tasks.db"));
 
-// Create tasks table
 db.prepare(`
     CREATE TABLE IF NOT EXISTS tasks (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -30,16 +40,12 @@ db.prepare(`
     )
 `).run();
 
-// READ - Get all tasks
+// READ
 app.get("/api/tasks", (req, res) => {
-    const tasks = db.prepare(
-        "SELECT * FROM tasks ORDER BY id DESC"
-    ).all();
-
-    res.json(tasks);
+    res.json(db.prepare("SELECT * FROM tasks ORDER BY id DESC").all());
 });
 
-// CREATE - Add a task
+// CREATE
 app.post("/api/tasks", (req, res) => {
     const { title, description, status } = req.body;
 
@@ -51,14 +57,13 @@ app.post("/api/tasks", (req, res) => {
         "INSERT INTO tasks (title, description, status) VALUES (?, ?, ?)"
     ).run(title.trim(), description || "", status || "Pending");
 
-    const task = db.prepare(
-        "SELECT * FROM tasks WHERE id = ?"
-    ).get(result.lastInsertRowid);
+    const task = db.prepare("SELECT * FROM tasks WHERE id = ?")
+        .get(result.lastInsertRowid);
 
     res.status(201).json(task);
 });
 
-// UPDATE - Edit a task
+// UPDATE
 app.put("/api/tasks/:id", (req, res) => {
     const { title, description, status } = req.body;
     const id = Number(req.params.id);
@@ -71,32 +76,27 @@ app.put("/api/tasks/:id", (req, res) => {
         "UPDATE tasks SET title = ?, description = ?, status = ? WHERE id = ?"
     ).run(title.trim(), description || "", status || "Pending", id);
 
-    if (result.changes === 0) {
+    if (!result.changes) {
         return res.status(404).json({ error: "Task not found" });
     }
 
-    const task = db.prepare(
-        "SELECT * FROM tasks WHERE id = ?"
-    ).get(id);
-
-    res.json(task);
+    res.json(db.prepare("SELECT * FROM tasks WHERE id = ?").get(id));
 });
 
-// DELETE - Remove a task
+// DELETE
 app.delete("/api/tasks/:id", (req, res) => {
     const result = db.prepare(
         "DELETE FROM tasks WHERE id = ?"
     ).run(Number(req.params.id));
 
-    if (result.changes === 0) {
+    if (!result.changes) {
         return res.status(404).json({ error: "Task not found" });
     }
 
     res.json({ message: "Task deleted successfully" });
 });
 
-// Start server
 app.listen(PORT, "0.0.0.0", () => {
     console.log(`Server running on port ${PORT}`);
-    console.log("SQLite database connected successfully!");
 });
+
